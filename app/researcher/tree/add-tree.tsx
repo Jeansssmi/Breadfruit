@@ -92,6 +92,77 @@ export default function AddTreeForm() {
     setFormData(prev => ({ ...prev, [key]: value }));
   };
 
+  /** Run classifier_model.tflite then breadfruit_diameter_model.tflite */
+  const runDiameterModels = async (uri: string) => {
+    setLoading(true);
+    try {
+      // Step 1: Load classifier
+      await loadModel('classifier_model.tflite', 'treelabels.txt');
+
+      const classification: any = await new Promise((resolve, reject) => {
+        tflite.runModelOnImage(
+          { path: uri, numResults: 2, threshold: 0.0 },
+          (err, res) => (err ? reject(err) : resolve(res))
+        );
+      });
+
+      const top = classification?.[0];
+      if (!top || top.label.toLowerCase() !== 'breadfruit') {
+        setNotificationMessage('Not a breadfruit tree.');
+        setNotificationType('error');
+        setNotificationVisible(true);
+        setLoading(false);
+        return;
+      }
+
+      // Step 2: Load diameter model
+      await loadModel('breadfruit_diameter_model.tflite');
+
+      const diameterRes: any = await new Promise((resolve, reject) => {
+        tflite.runModelOnImage({ path: uri, numResults: 2, threshold: 0.0 }, (err, res) =>
+          err ? reject(err) : resolve(res)
+        );
+      });
+
+      // Parse diameter
+      let diameter = null;
+      if (Array.isArray(diameterRes) && typeof diameterRes[0] === 'number') {
+        diameter = parseFloat(diameterRes[0].toFixed(2));
+      } else if (Array.isArray(diameterRes) && diameterRes[0]?.confidence) {
+        diameter = parseFloat(Number(diameterRes[0].confidence).toFixed(2));
+      }
+
+      if (diameter && !isNaN(diameter)) {
+        setDiameterInput(diameter.toString());
+        setFormData(prev => ({ ...prev, diameter }));
+        setNotificationMessage(`Diameter predicted: ${diameter} cm`);
+        setNotificationType('success');
+        setNotificationVisible(true);
+      } else {
+        throw new Error('Diameter model returned invalid output.');
+      }
+    } catch (e) {
+      console.error('Model error:', e);
+      setNotificationMessage('Model failed to process image.');
+      setNotificationType('error');
+      setNotificationVisible(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** Load model helper */
+  const loadModel = (modelPath: string, labelPath?: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const options: any = { model: modelPath, numThreads: 1 };
+      if (labelPath) options.labels = labelPath;
+      tflite.loadModel(options, (err: Error | null) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  };
+
   const handleCoordinateChange = (key: 'latitude' | 'longitude', value: string) => {
     setFormData(prev => ({
       ...prev,
